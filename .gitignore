@@ -8,6 +8,8 @@
 *.lnk
 *.bat
 
+test/test_data.bin
+
 #original -->
 
 *.class
