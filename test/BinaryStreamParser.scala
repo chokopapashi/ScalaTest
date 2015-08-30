@@ -40,7 +40,7 @@ object BinaryStreamParser {
                     println("end of file")
                     loopFlag = false
                 } else if(ret < 16) {
-                    println("No enough bygtes in last line.")
+                    println("No enough bytes in last line.")
                     println(s"remain : " +
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
                     loopFlag = false
