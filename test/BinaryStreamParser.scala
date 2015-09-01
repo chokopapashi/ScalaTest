@@ -1,6 +1,8 @@
 
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileWriter
+import java.io.PrintWriter
 import java.nio.ByteBuffer
 import java.net.InetAddress
 
@@ -21,7 +23,6 @@ object BinaryStreamParser {
         byteBuffer.put(bs).rewind
         byteBuffer.getInt
     }
-        
     def bin2Long(bs: Array[Byte]): Long = {
         val byteBuffer = ByteBuffer.allocate(8)
         byteBuffer.position(4)
@@ -31,7 +32,12 @@ object BinaryStreamParser {
 
     def parseBinaryStream(fileName: String) {
         val inStream = new FileInputStream(fileName) 
-        ultimately(inStream.close) {
+        val pWriter = new PrintWriter(new FileWriter("out.txt"))
+        ultimately{
+            inStream.close
+            pWriter.flush
+            pWriter.close
+        } {
             val inBuff: Array[Byte] = new Array(16)
             var loopFlag = true
             while(loopFlag) {
@@ -60,12 +66,12 @@ object BinaryStreamParser {
                         (1, bs => bin2hex(bs) + ":"),           /* minute */
                         (1, bs => bin2hex(bs) + " "),           /* second */
                         (2, bs => bin2hex(bs) + " "),           /* status */
-                        (2, bs => f"${bin2Int(bs)}%d" + " "),   /* millisecond */
-                        (4, bs => f"${bin2Long(bs)}%d" + " "),  /* nanosecond */
+                        (2, bs => f"${bin2Int(bs)}%5d" + " "),   /* millisecond */
+                        (4, bs => f"${bin2Long(bs)}%6d" + " "),  /* nanosecond */
                         (4, bs => InetAddress.getByAddress(bs).toString)
                                                                 /* IP Address */
                     ))
-                    println(formatedLine)
+                    pWriter.println(formatedLine)
                 }
             }
         }
