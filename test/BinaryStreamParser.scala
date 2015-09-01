@@ -32,7 +32,7 @@ object BinaryStreamParser {
 
     def parseBinaryStream(fileName: String) {
         val inStream = new FileInputStream(fileName) 
-        val pWriter = new PrintWriter(new FileWriter("out.txt"))
+        val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
         ultimately{
             inStream.close
             pWriter.flush
