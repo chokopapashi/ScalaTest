@@ -9,8 +9,7 @@ import java.net.InetAddress
 import scala.io.Source
 import scala.util.control.Exception._
 
-import scala.reflect.universe.TypeTag
-import scala.reflect.universe.Type
+import scala.reflect.runtime.{universe => ru}
 
 trait BinaryStreamParser {
     val recordSize: Int
@@ -29,14 +28,18 @@ trait BinaryStreamParser {
         byteBuffer.getLong
     }
 
-    case class BytesParseFunction[A: TypeTag](n: Int, func: Array[A] => String) {
-        def tpe: Type = typeOf[A]
+    /* BytesParseFunction */
+    case class BPF[A: ru.TypeTag](n: Int, func: Array[A] => String) {
+        def tpe: ru.Type = ru.typeOf[A]
+        def arg(bs: Array[Byte]): A = ru.typeOf[A] match {
+            case t if t =:= ru.typeOf[String] => bin2hex(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[Int]    => bin2Int(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[Long]   => bin2Long(bs).asInstanceOf[A]
+        }
     }
-    type BPF[A] = BytesParseFunction[A]
+    type BPFL = List[BPF[Any]]
 
-    type FL = List[BPF[Any]]
-
-    def parseBinaryStreamConcrete(fileName: String)(bpfList: FL) {
+    def parseBinaryStreamConcrete(fileName: String)(bpfList: BPFL) {
         val inStream = new FileInputStream(fileName) 
         val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
         ultimately{
@@ -57,12 +60,12 @@ trait BinaryStreamParser {
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
                     loopFlag = false
                 } else {
-                    def parseHexString(srcBytes: Array[Byte], dstStr: String)(fl: FL): String
+                    def parseHexString(srcBytes: Array[Byte], dstStr: String)(fl: BPFL): String
                     = {
                         fl match {
                             case Nil => dstStr
-                            case (n, _) :: _ if(srcBytes.length < n) => dstStr
-                            case (n, func) :: lt => parseHexString(srcBytes.drop(n), dstStr + func(srcBytes.take(n)))(lt)
+                            case BPF(n, _) :: _ if(srcBytes.length < n) => dstStr
+                            case (bpf @ BPF(n, func)) :: lt => parseHexString(srcBytes.drop(n), dstStr + func(bpf.arg(srcBytes.take(n))))(lt)
                         }
                     }
 
