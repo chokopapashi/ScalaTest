@@ -1,7 +1,8 @@
-
-import java.io.File
+import java.io.ByteArrayInputStream
 import java.io.FileInputStream
 import java.io.FileWriter
+import java.io.InputStream
+import java.io.OutputStreamWriter
 import java.io.PrintWriter
 import java.nio.ByteBuffer
 import java.net.InetAddress
@@ -28,22 +29,24 @@ trait BinaryStreamParser {
         byteBuffer.getLong
     }
 
+    type BPFType = String with Int with Long with InetAddress
+
     /* BytesParseFunction */
-    case class BPF[A: ru.TypeTag](n: Int, func: Array[A] => String) {
+    case class BPF[A >: BPFType : ru.TypeTag](n: Int, func: A => String) {
         def tpe: ru.Type = ru.typeOf[A]
         def arg(bs: Array[Byte]): A = ru.typeOf[A] match {
-            case t if t =:= ru.typeOf[String] => bin2hex(bs).asInstanceOf[A]
-            case t if t =:= ru.typeOf[Int]    => bin2Int(bs).asInstanceOf[A]
-            case t if t =:= ru.typeOf[Long]   => bin2Long(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[String]      => bin2hex(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[Int]         => bin2Int(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[Long]        => bin2Long(bs).asInstanceOf[A]
+            case t if t =:= ru.typeOf[InetAddress] => InetAddress.getByAddress(bs).asInstanceOf[A]
         }
     }
-    type BPFL = List[BPF[Any]]
 
-    def parseBinaryStreamConcrete(fileName: String)(bpfList: BPFL) {
-        val inStream = new FileInputStream(fileName) 
-        val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
+    val bpfList: List[BPF[_]]
+
+    def parseBinaryStream(inStream: InputStream, pWriter: PrintWriter) {
         ultimately{
-            inStream.close
+//            inStream.close
             pWriter.flush
             pWriter.close
         } {
@@ -60,9 +63,9 @@ trait BinaryStreamParser {
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
                     loopFlag = false
                 } else {
-                    def parseHexString(srcBytes: Array[Byte], dstStr: String)(fl: BPFL): String
+                    def parseHexString(srcBytes: Array[Byte], dstStr: String)(bpfl: List[BPF[_]]): String
                     = {
-                        fl match {
+                        bpfl match {
                             case Nil => dstStr
                             case BPF(n, _) :: _ if(srcBytes.length < n) => dstStr
                             case (bpf @ BPF(n, func)) :: lt => parseHexString(srcBytes.drop(n), dstStr + func(bpf.arg(srcBytes.take(n))))(lt)
@@ -76,30 +79,37 @@ trait BinaryStreamParser {
         }
     }
 
-    def parseBinaryStream(fileName: String)
+    def parseFromFile(fileName: String) {
+        val inStream = new FileInputStream(fileName) 
+        val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
+        parseBinaryStream(inStream, pWriter)
+    }
+
+    def parseFromString(hexStr: String) {
+        val inStream = new ByteArrayInputStream(hexStr.grouped(2).map(Integer.parseInt(_,16).toByte).toArray) 
+        val pWriter = new PrintWriter(new OutputStreamWriter(System.out))
+        parseBinaryStream(inStream, pWriter)
+    }
 }
 
 /*
  * 29010203ABCDABCDABCDEFABACA80164
- * 29 01:02:03 ABCD 43981.2882400171 192.168.1.100
+ * 29 01:02:03 ABCD 43981 2882400171 /192.168.1.100
  *
  */
 object BinaryStreamParser01 extends BinaryStreamParser {
     val recordSize = 16
 
-    def parseBinaryStream(fileName: String) {
-        parseBinaryStreamConcrete(fileName)(List(
-            BPF[String](1, bs => bin2hex(bs) + " "),           /* date */
-            BPF[String](1, bs => bin2hex(bs) + ":"),           /* hour */
-            BPF[String](1, bs => bin2hex(bs) + ":"),           /* minute */
-            BPF(1, bs => bin2hex(bs) + " "),           /* second */
-            BPF(2, bs => bin2hex(bs) + " "),           /* status */
-            BPF(2, bs => f"${bin2Int(bs)}%5d" + " "),  /* millisecond */
-            BPF(4, bs => f"${bin2Long(bs)}%6d" + " "), /* nanosecond */
-            BPF(4, bs => InetAddress.getByAddress(bs).toString)
-                                                    /* IP Address */
-        ))
-    }
+    val bpfList = List(
+        BPF[String](1, _ + " "),                /* date */
+        BPF[String](1, _ + ":"),                /* hour */
+        BPF[String](1, _ + ":"),                /* minute */
+        BPF[String](1, _ + " "),                /* second */
+        BPF[String](2, _ + " "),                /* status */
+        BPF[Int]   (2, i => f"$i%5d" + " "),    /* millisecond */
+        BPF[Long]  (4, l => f"$l%6d" + " "),    /* nanosecond */
+        BPF[InetAddress](4, _.toString)         /* IP Address */
+    )
 }
 
 /*
@@ -108,23 +118,21 @@ object BinaryStreamParser01 extends BinaryStreamParser {
  *
  */
 
-//object BinaryStreamParser02 extends BinaryStreamParser {
-//    val recordSize = 60
-//
-//    def parseBinaryStream(fileName: String) {
-//        parseBinaryStreamConcrete(fileName)(List(
-//            (1,  bs => bin2hex(bs) + " "),          /* date */
-//            (1,  bs => bin2hex(bs) + ":"),          /* hour */
-//            (1,  bs => bin2hex(bs) + ":"),          /* minute */
-//            (1,  bs => bin2hex(bs) + " "),          /* second */
-//            (2,  bs => bin2hex(bs) + " "),          /* status */
-//            (2,  bs => f"${bin2Int(bs)}%5d" + " "), /* millisecond */
-//            (4,  bs => f"${bin2Long(bs)}%6d" + " "),/* nanosecond */
-//            (42, bs => bin2hex(bs) + " "),          /* packet dump */
-//            (1,  bs => bin2hex(bs) + " "),          /* port_on */
-//            (1,  bs => bin2hex(bs) + " "),          /* dummy */
-//            (4,  bs => bin2hex(bs))                 /* fcs(CRC) */
-//        ))
-//    }
-//}
+object BinaryStreamParser02 extends BinaryStreamParser {
+    val recordSize = 60
+
+    val bpfList = List(
+            BPF[String]( 1, _ + " "),               /* date */
+            BPF[String]( 1, _ + ":"),               /* hour */
+            BPF[String]( 1, _ + ":"),               /* minute */
+            BPF[String]( 1, _ + " "),               /* second */
+            BPF[String]( 2, _ + " "),               /* status */
+            BPF[Int]   ( 2, i => f"$i%5d" + " "),   /* millisecond */
+            BPF[Long]  ( 4, l => f"$l%6d" + " "),   /* nanosecond */
+            BPF[String](42, _ + " "),               /* packet dump */
+            BPF[String]( 1, _ + " "),               /* port_on */
+            BPF[String]( 1, _ + " "),               /* dummy */
+            BPF[String]( 4, _ + "")                 /* fcs(CRC) */
+    )
+}
 
