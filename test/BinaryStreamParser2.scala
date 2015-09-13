@@ -46,9 +46,7 @@ trait BinaryStreamParser {
 
     def parseBinaryStream(inStream: InputStream, pWriter: PrintWriter) {
         ultimately{
-//            inStream.close
-            pWriter.flush
-            pWriter.close
+            inStream.close
         } {
             val inBuff: Array[Byte] = new Array(recordSize)
             var loopFlag = true
@@ -82,7 +80,12 @@ trait BinaryStreamParser {
     def parseFromFile(fileName: String) {
         val inStream = new FileInputStream(fileName) 
         val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
-        parseBinaryStream(inStream, pWriter)
+        ultimately{
+            pWriter.flush
+            pWriter.close
+        } {
+            parseBinaryStream(inStream, pWriter)
+        }
     }
 
     def parseFromString(hexStr: String) {
