@@ -48,18 +48,26 @@ trait BinaryStreamParser {
 
     val bpfList: List[BPF[_]]
 
-    type Ret = Tuple2[Long,String]
+    case class Ret(n: Long, s: String)
 
-    def startOutputFuture(queue: PBQueue[Ret]) {
+    def startOutputFuture(queue: PBQueue[Option[Ret]], pWriter: PrintWriter) {
         future {
             var count = 1
             var loopFlag = true
             while(loopFlag) {
-                val Ret( ) = queue.take
+                queue.take match {
+                    case Some(ret @ Ret(n, s)) => {
+                        if(n == count) {
+                            pWriter.println(s)
+                            count += 1
+                        } else
+                            queue.put(ret)
+                    }
+                    case None => loopFlag = false
+                }
             }
-
         } onSuccess {
-
+            case _ => ""
         }
     }
 
@@ -68,7 +76,7 @@ trait BinaryStreamParser {
             inStream.close
         } {
 
-            val queue = new PBQueue(100, new Comparator[Ret]() {
+            val queue = new PBQueue(100, new Comparator[Option[Ret]]() {
                 def compare(ret1: Ret, ret2: Ret) = ret1.n compare ret2.n
             })
 
