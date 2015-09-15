@@ -76,7 +76,7 @@ trait BinaryStreamParser {
                 }
             }
 
-            def startBinaryParserFuture(cnt: Long, buff: Array[Byte]): Future[String] = {
+            def startBinaryParserFuture(cnt: Long, buff: Array[Byte]) {
                 Future {
                     def parseBinary(srcBytes: Array[Byte], dstStr: String)(bpfl: List[BPF[_]]): String
                     = {
@@ -93,7 +93,7 @@ trait BinaryStreamParser {
                 }
             }
 
-            def startParseStopFuture(cnt: Long): Future[Unit] = {
+            def startParseStopFuture(cnt: Long) = {
                 Future {} onSuccess {case _ => queue.put(EndOfList(cnt))}
             }
 
@@ -114,12 +114,9 @@ trait BinaryStreamParser {
                     startParseStopFuture(lineCount)
                     loopFlag = false
                 } else {
-                    println("Åö8")
                     startBinaryParserFuture(lineCount, Array(inBuff: _*))
                 }
             }
-
-            Thread.sleep(3000)
 
             Await.ready(outFuture, Duration.Inf)
             pWriter.flush
