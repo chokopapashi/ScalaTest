@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import java.net.InetAddress
 import java.util.Comparator
 import java.util.concurrent.{PriorityBlockingQueue => PBQueue}
+import java.util.concurrent.TimeUnit
 
 import scala.concurrent._
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -54,6 +55,12 @@ trait BinaryStreamParser {
             inStream.close
         } {
             trait Ret { val n: Long }
+            object Ret {
+                def unapply(arg: Any):Option[Long] = arg match {
+                    case ret: Ret => Some(ret.n)
+                    case _ => None
+                }
+            }
             case class ResultString(n: Long, s: String) extends Ret
             case class EndOfList(n: Long) extends Ret
 
@@ -61,19 +68,29 @@ trait BinaryStreamParser {
                 def compare(ret1: Ret, ret2: Ret):Int = ret1.n compare ret2.n
             })
 
+            var los_count = 0
             val outFuture = Future {
                 var count = 1L
                 var loopFlag = true
                 while(loopFlag) {
-                    queue.take match {
-                        case ResultString(n, s) if(n == count) => {
-                            pWriter.println(s)
-                            count += 1
+                    queue.peek match {
+                        case Ret(n) if n == count => {
+                            queue.take match {
+                                case ResultString(n, s) => {
+                                    pWriter.println(s)
+                                    count += 1
+                                }
+                                case EndOfList(n) => loopFlag = false
+                                case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
+                            }
                         }
-                        case EndOfList(n) if(n == count) => loopFlag = false
-                        case ret => queue.put(ret)
+                        case _ => {
+                            los_count += 1
+                            TimeUnit.MILLISECONDS.sleep(50)
+                        }
                     }
                 }
+                printf("%d%n", los_count)
             }
 
             def startBinaryParserFuture(cnt: Long, buff: Array[Byte]) {
