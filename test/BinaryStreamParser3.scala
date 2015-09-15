@@ -10,7 +10,8 @@ import java.util.Comparator
 import java.util.concurrent.{PriorityBlockingQueue => PBQueue}
 
 import scala.concurrent._
-import ExecutionContext.Implicits.global
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.Duration
 import scala.io.Source
 import scala.util.control.Exception._
 
@@ -48,64 +49,80 @@ trait BinaryStreamParser {
 
     val bpfList: List[BPF[_]]
 
-    case class Ret(n: Long, s: String)
-
-    def startOutputFuture(queue: PBQueue[Option[Ret]], pWriter: PrintWriter) {
-        future {
-            var count = 1
-            var loopFlag = true
-            while(loopFlag) {
-                queue.take match {
-                    case Some(ret @ Ret(n, s)) => {
-                        if(n == count) {
-                            pWriter.println(s)
-                            count += 1
-                        } else
-                            queue.put(ret)
-                    }
-                    case None => loopFlag = false
-                }
-            }
-        } onSuccess {
-            case _ => ""
-        }
-    }
-
     def parseBinaryStream(inStream: InputStream, pWriter: PrintWriter) {
         ultimately{
             inStream.close
         } {
+            trait Ret { val n: Long }
+            case class ResultString(n: Long, s: String) extends Ret
+            case class EndOfList(n: Long) extends Ret
 
-            val queue = new PBQueue(100, new Comparator[Option[Ret]]() {
-                def compare(ret1: Ret, ret2: Ret) = ret1.n compare ret2.n
+            val queue = new PBQueue(1000, new Comparator[Ret]() {
+                def compare(ret1: Ret, ret2: Ret):Int = ret1.n compare ret2.n
             })
 
+            val outFuture = Future {
+                var count = 1L
+                var loopFlag = true
+                while(loopFlag) {
+                    queue.take match {
+                        case ResultString(n, s) if(n == count) => {
+                            pWriter.println(s)
+                            count += 1
+                        }
+                        case EndOfList(n) if(n == count) => loopFlag = false
+                        case ret => queue.put(ret)
+                    }
+                }
+            }
+
+            def startBinaryParserFuture(cnt: Long, buff: Array[Byte]): Future[String] = {
+                Future {
+                    def parseBinary(srcBytes: Array[Byte], dstStr: String)(bpfl: List[BPF[_]]): String
+                    = {
+                        bpfl match {
+                            case Nil => dstStr
+                            case BPF(n, _) :: _ if(srcBytes.length < n) => dstStr
+                            case (bpf @ BPF(n, func)) :: lt => parseBinary(srcBytes.drop(n), dstStr + func(bpf.arg(srcBytes.take(n))))(lt)
+                        }
+                    }
+
+                    parseBinary(buff, "")(bpfList)
+                } onSuccess {
+                    case s => queue.put(ResultString(cnt,s))
+                }
+            }
+
+            def startParseStopFuture(cnt: Long): Future[Unit] = {
+                Future {} onSuccess {case _ => queue.put(EndOfList(cnt))}
+            }
+
+            var lineCount: Long = 0L
             val inBuff: Array[Byte] = new Array(recordSize)
             var loopFlag = true
             while(loopFlag) {
                 var ret = inStream.read(inBuff)
+                lineCount += 1
                 if(ret < 0) {
                     println("end of file")
+                    startParseStopFuture(lineCount)
                     loopFlag = false
                 } else if(ret < recordSize) {
                     println("No enough bytes in last line.")
                     println(s"remain : " +
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
+                    startParseStopFuture(lineCount)
                     loopFlag = false
                 } else {
-                    def parseHexString(srcBytes: Array[Byte], dstStr: String)(bpfl: List[BPF[_]]): String
-                    = {
-                        bpfl match {
-                            case Nil => dstStr
-                            case BPF(n, _) :: _ if(srcBytes.length < n) => dstStr
-                            case (bpf @ BPF(n, func)) :: lt => parseHexString(srcBytes.drop(n), dstStr + func(bpf.arg(srcBytes.take(n))))(lt)
-                        }
-                    }
-
-                    val formatedLine = parseHexString(inBuff, "")(bpfList)
-                    pWriter.println(formatedLine)
+                    println("Åö8")
+                    startBinaryParserFuture(lineCount, Array(inBuff: _*))
                 }
             }
+
+            Thread.sleep(3000)
+
+            Await.ready(outFuture, Duration.Inf)
+            pWriter.flush
         }
     }
 
@@ -113,7 +130,6 @@ trait BinaryStreamParser {
         val inStream = new FileInputStream(fileName) 
         val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
         ultimately{
-            pWriter.flush
             pWriter.close
         } {
             parseBinaryStream(inStream, pWriter)
