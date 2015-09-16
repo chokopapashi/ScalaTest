@@ -1,3 +1,4 @@
+import java.io.BufferedWriter
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
 import java.io.FileWriter
@@ -10,6 +11,7 @@ import java.util.Comparator
 import java.util.concurrent.{PriorityBlockingQueue => PBQueue}
 import java.util.concurrent.TimeUnit
 
+import scala.collection.mutable.{PriorityQueue => PQueue}
 import scala.concurrent._
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.Duration
@@ -17,6 +19,12 @@ import scala.io.Source
 import scala.util.control.Exception._
 
 import scala.reflect.runtime.{universe => ru}
+
+def execTime[A](v: => A) {
+    val st = System.currentTimeMillis
+    v
+    println(f"exec time = ${System.currentTimeMillis - st}%d")
+}
 
 trait BinaryStreamParser {
     val recordSize: Int
@@ -63,34 +71,58 @@ trait BinaryStreamParser {
             }
             case class ResultString(n: Long, s: String) extends Ret
             case class EndOfList(n: Long) extends Ret
-
-            val queue = new PBQueue(1000, new Comparator[Ret]() {
+/*
+            val pbQueue = new PBQueue(1000, new Comparator[Ret]() {
                 def compare(ret1: Ret, ret2: Ret):Int = ret1.n compare ret2.n
             })
+*/
+            val pbQueue = new java.util.concurrent.ArrayBlockingQueue[Ret](100)
 
             var los_count = 0
             val outFuture = Future {
+
+                val pQueue: PQueue[Ret] = PQueue()(new Ordering[Ret] {
+                    /* defult order is ascending. exchange argument usage to do descending order */
+                    def compare(ret1: Ret, ret2: Ret):Int = ret2.n compare ret1.n
+                })
+
                 var count = 1L
                 var loopFlag = true
                 while(loopFlag) {
-                    queue.peek match {
+//                    println(f"Åö0:${pbQueue.size}%d")
+//                    println(f"Åö0:${pQueue.size}%d")
+                    pbQueue.poll(100, TimeUnit.MILLISECONDS) match {
+                        case null => /* Nothing to do. */
+                        case ret => pQueue.enqueue(ret)
+                    }
+                    pQueue.head match
+//                    pbQueue.peek match
+                    {
                         case Ret(n) if n == count => {
-                            queue.take match {
+//                            println(f"Åö1:count=$count%d,$n%d")
+                            pQueue.dequeue match
+//                            pbQueue.take match
+                            {
                                 case ResultString(n, s) => {
+//                                    println("Åö2")
                                     pWriter.println(s)
                                     count += 1
                                 }
-                                case EndOfList(n) => loopFlag = false
+                                case EndOfList(n) => {
+ //                                   println("Åö3")
+                                    loopFlag = false
+                                }
                                 case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
                             }
                         }
-                        case _ => {
+                        case ret => {
+//                            println(f"Åö4:count=$count%d,$ret")
                             los_count += 1
-                            TimeUnit.MILLISECONDS.sleep(50)
+//                            TimeUnit.MILLISECONDS.sleep(1)
                         }
                     }
                 }
-                printf("%d%n", los_count)
+                println(f"los_count=$los_count%d")
             }
 
             def startBinaryParserFuture(cnt: Long, buff: Array[Byte]) {
@@ -106,12 +138,20 @@ trait BinaryStreamParser {
 
                     parseBinary(buff, "")(bpfList)
                 } onSuccess {
-                    case s => queue.put(ResultString(cnt,s))
+                    case s => {
+//                        println(f"ÅöA1:cnt=$cnt%d")
+                        pbQueue.put(ResultString(cnt,s))
+                    }
                 }
             }
 
             def startParseStopFuture(cnt: Long) = {
-                Future {} onSuccess {case _ => queue.put(EndOfList(cnt))}
+                Future {} onSuccess {
+                    case _ => {
+//                        println(f"ÅöA2:cnt=$cnt%d")
+                        pbQueue.put(EndOfList(cnt))
+                    }
+                }
             }
 
             var lineCount: Long = 0L
@@ -142,7 +182,7 @@ trait BinaryStreamParser {
 
     def parseFromFile(fileName: String) {
         val inStream = new FileInputStream(fileName) 
-        val pWriter = new PrintWriter(new FileWriter(fileName.split('.')(0) + "_out.txt"))
+        val pWriter = new PrintWriter(new BufferedWriter(new FileWriter(fileName.split('.')(0) + "_out.txt")), true)
         ultimately{
             pWriter.close
         } {
@@ -152,7 +192,7 @@ trait BinaryStreamParser {
 
     def parseFromString(hexStr: String) {
         val inStream = new ByteArrayInputStream(hexStr.grouped(2).map(Integer.parseInt(_,16).toByte).toArray) 
-        val pWriter = new PrintWriter(new OutputStreamWriter(System.out))
+        val pWriter = new PrintWriter(new OutputStreamWriter(System.out), true)
         parseBinaryStream(inStream, pWriter)
     }
 }
