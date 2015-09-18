@@ -7,13 +7,14 @@ import java.io.OutputStreamWriter
 import java.io.PrintWriter
 import java.nio.ByteBuffer
 import java.net.InetAddress
-import java.util.Comparator
-import java.util.concurrent.{PriorityBlockingQueue => PBQueue}
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 
-import scala.collection.mutable.{PriorityQueue => PQueue}
+
 import scala.concurrent._
-import scala.concurrent.ExecutionContext.Implicits.global
+//import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.Duration
 import scala.io.Source
 import scala.util.control.Exception._
@@ -62,70 +63,69 @@ trait BinaryStreamParser {
         ultimately{
             inStream.close
         } {
-            trait Ret { val n: Long }
+            trait Ret { val n: Int }
             object Ret {
-                def unapply(arg: Any):Option[Long] = arg match {
+                def unapply(arg: Any):Option[Int] = arg match {
                     case ret: Ret => Some(ret.n)
                     case _ => None
                 }
             }
-            case class ResultString(n: Long, s: String) extends Ret
-            case class EndOfList(n: Long) extends Ret
-/*
-            val pbQueue = new PBQueue(1000, new Comparator[Ret]() {
-                def compare(ret1: Ret, ret2: Ret):Int = ret1.n compare ret2.n
-            })
-*/
-            val pbQueue = new java.util.concurrent.ArrayBlockingQueue[Ret](100)
+            case class ResultString(n: Int, s: String) extends Ret
+            case class EndOfList(n: Int) extends Ret
 
-            var los_count = 0
+            var countDownLatch: CountDownLatch = null
+            def initCountDownLatch() = countDownLatch = new CountDownLatch(1)
+
+            val EXEC_UNIT = 1000
+            val outCollectQueue = new ArrayBlockingQueue[Ret](EXEC_UNIT)
+            val outQueue = new LinkedBlockingQueue[Option[Array[String]]]
+
+            /* ------------------------------------------------------------ */
+
+            val outExecutionContext = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(2))
             val outFuture = Future {
-
-                val pQueue: PQueue[Ret] = PQueue()(new Ordering[Ret] {
-                    /* defult order is ascending. exchange argument usage to do descending order */
-                    def compare(ret1: Ret, ret2: Ret):Int = ret2.n compare ret1.n
-                })
-
-                var count = 1L
                 var loopFlag = true
                 while(loopFlag) {
-//                    println(f"š0:${pbQueue.size}%d")
-//                    println(f"š0:${pQueue.size}%d")
-                    pbQueue.poll(100, TimeUnit.MILLISECONDS) match {
-                        case null => /* Nothing to do. */
-                        case ret => pQueue.enqueue(ret)
-                    }
-                    pQueue.head match
-//                    pbQueue.peek match
-                    {
-                        case Ret(n) if n == count => {
-//                            println(f"š1:count=$count%d,$n%d")
-                            pQueue.dequeue match
-//                            pbQueue.take match
-                            {
-                                case ResultString(n, s) => {
-//                                    println("š2")
-                                    pWriter.println(s)
-                                    count += 1
-                                }
-                                case EndOfList(n) => {
- //                                   println("š3")
-                                    loopFlag = false
-                                }
-                                case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
-                            }
-                        }
-                        case ret => {
-//                            println(f"š4:count=$count%d,$ret")
-                            los_count += 1
-//                            TimeUnit.MILLISECONDS.sleep(1)
-                        }
+                    outQueue.take match {
+                        case Some(sArray) => sArray.foreach(pWriter.println(_))
+                        case None => loopFlag = false
                     }
                 }
-                println(f"los_count=$los_count%d")
-            }
+            }(outExecutionContext)
 
-            def startBinaryParserFuture(cnt: Long, buff: Array[Byte]) {
+            val outCollectFuture = Future {
+                var count = 0
+                var sArray = new Array[String](EXEC_UNIT)
+                var loopFlag = true
+                while(loopFlag) {
+                    outCollectQueue.take match {
+                        case ResultString(n, s) => {
+                            sArray(n-1) = s
+                            count += 1
+                            if(count == EXEC_UNIT) {
+                                outQueue.put(Some(sArray))
+                                count = 0
+                                sArray = new Array(EXEC_UNIT)
+                                countDownLatch.countDown
+                            }
+                        }
+                        case EndOfList(n) => {
+                            if(count != 0) {
+                                outQueue.put(Some(sArray.filter(_ != null)))
+                            }
+                            outQueue.put(None)
+                            loopFlag = false
+                        }
+                        case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
+                    }
+                }
+            }(outExecutionContext)
+
+            /* ------------------------------------------------------------ */
+
+            val parseExecutionContext: ExecutionContext = ExecutionContext.fromExecutorService(Executors.newWorkStealingPool)
+            def startBinaryParserFuture(cnt: Int, buff: Array[Byte]) {
+                implicit val execContext = parseExecutionContext
                 Future {
                     def parseBinary(srcBytes: Array[Byte], dstStr: String)(bpfl: List[BPF[_]]): String
                     = {
@@ -138,23 +138,21 @@ trait BinaryStreamParser {
 
                     parseBinary(buff, "")(bpfList)
                 } onSuccess {
-                    case s => {
-//                        println(f"šA1:cnt=$cnt%d")
-                        pbQueue.put(ResultString(cnt,s))
-                    }
+                    case s => outCollectQueue.put(ResultString(cnt,s))
                 }
             }
 
-            def startParseStopFuture(cnt: Long) = {
-                Future {} onSuccess {
-                    case _ => {
-//                        println(f"šA2:cnt=$cnt%d")
-                        pbQueue.put(EndOfList(cnt))
-                    }
+            def startParseStopFuture(cnt: Int) = {
+                implicit val execContext = parseExecutionContext
+                Future {}(parseExecutionContext) onSuccess {
+                    case _ => outCollectQueue.put(EndOfList(cnt))
                 }
             }
 
-            var lineCount: Long = 0L
+            /* ------------------------------------------------------------ */
+
+            initCountDownLatch()
+            var lineCount = 0
             val inBuff: Array[Byte] = new Array(recordSize)
             var loopFlag = true
             while(loopFlag) {
@@ -172,6 +170,11 @@ trait BinaryStreamParser {
                     loopFlag = false
                 } else {
                     startBinaryParserFuture(lineCount, Array(inBuff: _*))
+                    if((lineCount % EXEC_UNIT) == 0) {
+                        countDownLatch.await
+                        lineCount = 0
+                        initCountDownLatch()
+                    }
                 }
             }
 
