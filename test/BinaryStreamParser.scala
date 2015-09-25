@@ -34,11 +34,15 @@ trait BinaryStreamParser {
     /* BytesParseFunction */
     case class BPF[A >: BPFType : ru.TypeTag](n: Int, func: A => String) {
         def tpe: ru.Type = ru.typeOf[A]
+        val tpe_String      = ru.typeOf[String] 
+        val tpe_Int         = ru.typeOf[Int] 
+        val tpe_Long        = ru.typeOf[Long] 
+        val tpe_InetAddress = ru.typeOf[InetAddress] 
         def arg(bs: Array[Byte]): A = ru.typeOf[A] match {
-            case t if t =:= ru.typeOf[String]      => bin2hex(bs).asInstanceOf[A]
-            case t if t =:= ru.typeOf[Int]         => bin2Int(bs).asInstanceOf[A]
-            case t if t =:= ru.typeOf[Long]        => bin2Long(bs).asInstanceOf[A]
-            case t if t =:= ru.typeOf[InetAddress] => InetAddress.getByAddress(bs).asInstanceOf[A]
+            case t if t =:= tpe_String      => bin2hex(bs).asInstanceOf[A]
+            case t if t =:= tpe_Int         => bin2Int(bs).asInstanceOf[A]
+            case t if t =:= tpe_Long        => bin2Long(bs).asInstanceOf[A]
+            case t if t =:= tpe_InetAddress => InetAddress.getByAddress(bs).asInstanceOf[A]
         }
     }
 
