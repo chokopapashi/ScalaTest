@@ -181,7 +181,7 @@ trait BinaryStreamParser {
                     println("end of file")
                     startParseStopFuture(lineCount)
                     loopFlag = false
-                } else if(ret < recordSize) {
+                } else if(ret < RECORD_SIZE) {
                     println("No enough bytes in last line.")
                     println(s"remain : " +
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
