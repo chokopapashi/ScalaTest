@@ -71,45 +71,45 @@ trait BinaryStreamParser {
         ultimately{
             inStream.close
         } {
-            trait Ret { val n: Int }
+            trait Ret { val n: Long }
             object Ret {
-                def unapply(arg: Any):Option[Int] = arg match {
+                def unapply(arg: Any):Option[Long] = arg match {
                     case ret: Ret => Some(ret.n)
                     case _ => None
                 }
             }
-            case class ResultString(n: Int, s: String) extends Ret
-            case class EndOfList(n: Int) extends Ret
 
-            val cyclicBarrier = new CyclicBarrier(2)
+//            case class ResultString(n: Long, s: String) extends Ret
+//            case class EndOfList(n: Long) extends Ret
+
+//            val cyclicBarrier = new CyclicBarrier(2)
             var countDownLatch =  new CountDownLatch(1)
 
 //            val EXEC_UNIT = 20000
-            val EXEC_UNIT = 20
 //            val outQueue = new LinkedBlockingQueue[Option[Array[String]]]
 //            val outCollectQueue = new ArrayBlockingQueue[Ret](EXEC_UNIT)
-            val outQueue = new ArrayBlockingQueue[Ret](EXEC_UNIT)
+//            val outQueue = new ArrayBlockingQueue[Ret](EXEC_UNIT)
 
             /* ------------------------------------------------------------ */
 
-            val outExecutionContext = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(2))
-
+//            val outExecutionContext = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(2))
+/*{{{
             def startOutFuture(count: Long): Unit = Future {
                 outQueue.take match {
                     case ResultString(n, s) => {
-                        pWriter.println(f"š1:count=$count%d,$n%d")
+//                        println(f"â—†1:count=$count%d,$n%d")
                         pWriter.println(s)
                         startOutFuture(count + 1 )
                     }
                     case EndOfList(n) => {
-                       pWriter.println(f"š2:count=$count%d")
+                        println(f"â—†2:count=$count%d")
                         countDownLatch.countDown
                     }
                     case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
                 }
             }(outExecutionContext)
-
-/*
+}}}**/
+/*{{{
             def startOutFuture(): Unit = Future {
                 outQueue.take match {
                     case Some(sArray) => {
@@ -140,14 +140,13 @@ trait BinaryStreamParser {
                     case ret => throw new IllegalStateException(s"unexpected Ret : $ret")
                 }
             }(outExecutionContext)
-*/
+}}}*/
             /* ------------------------------------------------------------ */
 
             val parseExecutionContext: ExecutionContext = ExecutionContext.fromExecutorService(Executors.newWorkStealingPool(16))
 
-            def startBinaryParserFuture(previousFuture: Future[String], cnt: Int, buff: Array[Byte]): Future[String] = {
+            def startBinaryParserFuture(previousFuture: Future[String], cnt: Long, buff: Array[Byte]): Future[String] = {
                 implicit val execContext = parseExecutionContext
-
                 val parseFuture = previousFuture.flatMap(s =>
                     Future {
                         @tailrec
@@ -159,22 +158,22 @@ trait BinaryStreamParser {
                                 case (bpf @ BPF(n, func)) :: lt => parseBinary(srcBytes.drop(n), dstStr + func(bpf.arg(srcBytes.take(n))))(lt)
                             }
                         }
-
+//                        println(f"â˜…1:cnt=$cnt")
                         parseBinary(buff, "")(bpfList)
                     }
                 )
-
                 parseFuture.onSuccess {
 //                    case s => outCollectQueue.put(ResultString(cnt,s))
                     case s => {
-                        pWriter.println(f"šA:cnt=$cnt%d,$s")
-                        outQueue.put(ResultString(cnt,s))
+//                        println(f"â˜…2:cnt=$cnt%d")
+//                        outQueue.put(ResultString(cnt,s))
+                        pWriter.println(s)
+//                        println(f"â˜…3:cnt=$cnt%d")
                     }
                 }
-
                 parseFuture
             }
-/*
+/*{{{
             def startBinaryParserFuture(cnt: Int, buff: Array[Byte]) {
                 implicit val execContext = parseExecutionContext
                 Future {
@@ -193,48 +192,53 @@ trait BinaryStreamParser {
                     case s => outCollectQueue.put(ResultString(cnt,s))
                 }
             }
-*/
-            def startParseStopFuture(cnt: Int) = {
+}}}*/
+
+            def startParseStopFuture(previousFuture: Future[String], cnt: Long): Future[String] = {
                 implicit val execContext = parseExecutionContext
-                Future {}(parseExecutionContext) onSuccess {
+                val parseStopFuture = previousFuture.flatMap(s => Future {""}(parseExecutionContext))
+                parseStopFuture.onSuccess {
 //                    case _ => outCollectQueue.put(EndOfList(cnt))
-                    case _ => outQueue.put(EndOfList(cnt))
+//                    case _ => outQueue.put(EndOfList(cnt))
+                    case _ => countDownLatch.countDown
                 }
+                parseStopFuture
             }
 
             /* ------------------------------------------------------------ */
+/*{{{
+            startOutFuture()
+            startOutCollectFuture(0, new Array(EXEC_UNIT))
+}}}*/
+//            startOutFuture(1)
 
-//            startOutFuture()
-//            startOutCollectFuture(0, new Array(EXEC_UNIT))
-            startOutFuture(0)
-
-            var lineCount = 0
-
-            def parseLoop(previousFuture: Future[String]) {
+            def parseLoop(lineCount: Long, previousFuture: Future[String]) {
                 val inBuff: Array[Byte] = new Array(RECORD_SIZE)
                 var ret = inStream.read(inBuff)
-                lineCount += 1
                 if(ret < 0) {
                     println("end of file")
-                    startParseStopFuture(lineCount)
+                    startParseStopFuture(previousFuture, lineCount)
                 } else if(ret < RECORD_SIZE) {
+                    println(f"â–¡2:lineCoount=$lineCount")
                     println("No enough bytes in last line.")
                     println(s"remain : " +
                             inBuff.take(ret).map(_.toByte).grouped(2).map(a => f"${a(0)}%02X${a(1)}%02X").mkString(","))
-                    startParseStopFuture(lineCount)
+                    startParseStopFuture(previousFuture, lineCount)
                 } else {
                     val parseFuture = startBinaryParserFuture(previousFuture, lineCount, inBuff)
+/*{{{
                     if((lineCount % EXEC_UNIT) == 0) {
                         cyclicBarrier.await
                         lineCount = 0
                     }
-                    parseLoop(parseFuture)
+}}}*/
+                    parseLoop(lineCount+1, parseFuture)
                 }
             }
 
-            parseLoop(Future{""}(parseExecutionContext))
+            parseLoop(1, Future{""}(parseExecutionContext))
 
-/*
+/*{{{
             while(loopFlag) {
                 val inBuff: Array[Byte] = new Array(RECORD_SIZE)
                 var ret = inStream.read(inBuff)
@@ -257,7 +261,7 @@ trait BinaryStreamParser {
                     }
                 }
             }
-*/
+}}}*/
             countDownLatch.await
             pWriter.flush
         }
@@ -324,3 +328,4 @@ object BinaryStreamParser02 extends BinaryStreamParser {
     )
 }
 
+/* vim: set foldmethod=marker: */
