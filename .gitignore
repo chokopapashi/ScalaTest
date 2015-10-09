@@ -9,6 +9,10 @@
 *.bat
 
 test/test_data.bin
+test/test_data_out.txt
+test/004b81_150915.ifd0
+test/004b81_150915_1052_out.txt
+test/004b81_150915_out.txt
 
 #original -->
 
