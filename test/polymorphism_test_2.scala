@@ -1,13 +1,18 @@
-:reset
+
+
 
 import scala.reflect.ClassTag
 import scala.reflect.runtime.{universe => ru}
 
-object test
+object test {
 
-class CA(val s: String)
+trait TA { val s: String }
+class CA(val s: String) extends TA
+class CB(val s: String) extends TA
 
-def newInstance[A <: CA](s: String)(implicit tA: ru.TypeTag[A]): A = {
+type TASub = (CA with CB)
+
+def newInstance[A >: TASub <: TA](s: String)(implicit tA: ru.TypeTag[A]): A = {
     /* Instantiating a Type at Runtime for 2.10 */
     val m = ru.runtimeMirror(getClass.getClassLoader)               /* Obtaining a mirror */
     val cs = ru.typeOf[A].typeSymbol.asClass                        /* Obtaining a class */
@@ -17,13 +22,9 @@ def newInstance[A <: CA](s: String)(implicit tA: ru.TypeTag[A]): A = {
     ctorm(s).asInstanceOf[A]
 }
 
-/*
-def newInstance(x: Int) {
-
-}
-
-def parseParam[A](x: Int): A = {
-
+//def parseParam[A >: TASub <: TA](s: String)(implicit tA: ru.TypeTag[A]): A
+def parseParam[A >: TASub <: TA : ru.TypeTag](s: String): A = {
+    newInstance[A](s)
 }
 
 def func1(x: Int) {
@@ -32,8 +33,11 @@ def func1(x: Int) {
         case 2 =>
     }
 }
-*/
 
-
+}
 
-newInstance[CA]("a")
+import test._
+
+parseParam[CA]("a")
+parseParam[CB]("b")
+
