@@ -31,11 +31,18 @@ object TestParser extends RegexParsers {
     def line = log((comment | elements) <~ eol)("line")
     def emptyLine = eol ^^ {_ => AST_Empty()}
     def lines = log(rep(emptyLine | line) ~ opt(element))("lines") ^^ {
-        case ls ~ optl => optl match {
-            case Some(l) => ls :+ l
-            case None    => ls
+        case ls ~ optl => {
+            val lsl = optl match {
+                case Some(l) => ls :+ l
+                case None    => ls
+            }
+            lsl.filter {
+                case ast: COMU_AST_Empty => false
+                case _ => true
+            }
         }
     }
+
     def all: Parser[List[AST]] = lines
 //    def all = lines
 
